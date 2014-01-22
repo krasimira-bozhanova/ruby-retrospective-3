@@ -8,7 +8,19 @@ module Asm
   class BlockParser
     attr_reader :block_array, :labels
 
-    ASSEMBLER_METHODS = [:mov, :inc, :dec, :cmp, :jmp, :je, :jne, :jg, :jge, :jle, :jl]
+    ASSEMBLER_METHODS = [
+      :mov,
+      :inc,
+      :dec,
+      :cmp,
+      :jmp,
+      :je,
+      :jne,
+      :jg,
+      :jge,
+      :jle,
+      :jl
+    ]
 
     ASSEMBLER_METHODS.each do |method_name|
       define_method method_name do |*args|
@@ -49,16 +61,14 @@ module Asm
 
     METHODS_JUMP.each do |method_name, operation|
       define_method method_name do |where|
-        if @last_comparing.send operation, 0
-          jmp where
-        end
+        @last_comparing.send operation, 0 and jmp where
       end
     end
 
     METHODS_MODIFY.each do |method_name, operation|
-      define_method method_name do |destination_register, value|
-        destination_register_value = send "register_" + destination_register.to_s
-        modify_with = destination_register_value.send operation, get_value(value)
+      define_method method_name do |destination_register, value=1|
+        destination_value = send "register_" + destination_register.to_s
+        modify_with = destination_value.send operation, get_value(value)
         send "register_" + "#{destination_register}=", modify_with
       end
     end
@@ -67,16 +77,8 @@ module Asm
       @register_ax, @register_bx, @register_cx, @register_dx = 0, 0, 0, 0
       @commands = block_array
       @labels = labels
-      @current_command = 0
-      @last_comparing = 0
+      @current_command, @last_comparing = 0, 0
       evaluate
-    end
-
-    def evaluate
-      while @current_command < @commands.size
-        send *@commands[@current_command]
-        @current_command = @current_command + 1
-      end
     end
 
     def get_registers
@@ -99,10 +101,17 @@ module Asm
       end
     end
 
+    private
+
+    def evaluate
+      while @current_command < @commands.size
+        send *@commands[@current_command]
+        @current_command = @current_command + 1
+      end
+    end
+
     def get_value(value)
       value.is_a?(Symbol) ? (send "register_" + value.to_s) : value
     end
-
-    private :get_value, :evaluate
   end
 end

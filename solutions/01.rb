@@ -21,9 +21,9 @@ end
 
 class Array
   def frequencies
-    frequencies = Hash.new(0)
-    each { |element| frequencies[element] += 1 }
-    frequencies
+    each_with_object Hash.new(0) do |value, result|
+      result[value] += 1
+    end
   end
 
   def average
@@ -37,6 +37,6 @@ class Array
   def combine_with(other)
     smaller_size = [size, other.size].min
     remainder = drop(smaller_size) + other.drop(smaller_size)
-    zip(other).flatten.take(2 * smaller_size) + remainder
+    zip(other).flatten(1).take(2 * smaller_size) + remainder
   end
 end

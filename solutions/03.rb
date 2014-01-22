@@ -5,15 +5,15 @@ module Graphics
     def initialize(width, height)
       @width = width
       @height = height
-      @canvas = Array.new(height) { Array.new(width) {0} }
+      @canvas = {}
     end
 
     def set_pixel(x, y)
-      @canvas[y][x] = 1
+      @canvas[[x,y]] = true
     end
 
     def pixel_at?(x, y)
-      not @canvas[y][x].zero?
+      @canvas[[x,y]] == true
     end
 
     def draw(figure)
@@ -21,17 +21,13 @@ module Graphics
     end
 
     def render_as(renderer)
-      renderer_string = renderer::RENDER_TABLE[:start]
-      renderer_string += @canvas.map do |line|
-        line.map { |symbol| renderer::RENDER_TABLE[symbol] }.join
-      end.join(renderer::RENDER_TABLE[:line_separator])
-      renderer_string += renderer::RENDER_TABLE[:end]
+      renderer.new(self).render
     end
   end
 
-  class GeometryFigure
+  class Figure
     def ==(other_figure)
-      sufficient == other_figure.sufficient
+      identify_by == other_figure.identify_by
     end
 
     def eql?(other_figure)
@@ -39,11 +35,11 @@ module Graphics
     end
 
     def hash
-      sufficient.hash
+      identify_by.hash
     end
   end
 
-  class Point < GeometryFigure
+  class Point < Figure
     attr_reader :x, :y
 
     def initialize(x, y)
@@ -51,7 +47,7 @@ module Graphics
       @y = y
     end
 
-    def sufficient
+    def identify_by
       [x, y]
     end
 
@@ -66,106 +62,180 @@ module Graphics
     end
   end
 
-  class Line < GeometryFigure
+  class Line < Figure
     attr_reader :from, :to
 
     def initialize(first_end, second_end)
-      @from, @to = *[first_end, second_end].sort
+      @from, @to = [first_end, second_end].sort
     end
 
-    def sufficient
+    def identify_by
       [from, to]
     end
 
-    def difference(axis)
-      (@from.public_send(axis) - @to.public_send(axis)).abs
+    def pixels
+      BresenhamRasterization.new.rasterize self
     end
 
-    def delta
-      [difference(:x), difference(:y)].map(&:to_r).sort.reduce(&:/)
-    end
+    class BresenhamRasterization
+      def difference(axis)
+        (@line.from.public_send(axis) - @line.to.public_send(axis)).abs
+      end
 
-    def point_based_on_steep(x, y)
-      difference(:y) > difference(:x) ? Point.new(y, x) : Point.new(x, y)
-    end
+      def delta
+        if [difference(:x), difference(:y)].any? { |difference| difference == 0 }
+          return 0
+        end
+        [difference(:x), difference(:y)].map(&:to_r).sort.reduce(&:/)
+      end
 
-    def bresenham_generation(from, to, error, y)
-      from.x.upto(to.x).each_with_object([]) do |x, gen_pixels|
-        gen_pixels << (point_based_on_steep(x, y))
-        error += delta
-        if error >= 0.5
-          y += to.y <=> from.y
-          error -= 1.0
+      def point_based_on_steepness(x, y)
+        difference(:y) > difference(:x) ? Point.new(y, x) : Point.new(x, y)
+      end
+
+      def rasterize(line)
+        @line = line
+        @from, @to = line.identify_by.map do |point|
+          point_based_on_steepness(*point.identify_by)
+        end.sort
+        perform_rasterization(0, @from.y)
+      end
+
+      def switch_to_next_line(y, error)
+        [y + (@to.y <=> @from.y), error - 1.0]
+      end
+
+      def perform_rasterization(error, y)
+        @from.x.upto(@to.x).each_with_object([]) do |x, gen_pixels|
+          gen_pixels << (point_based_on_steepness(x, y))
+          error += delta
+          if error >= 0.5
+            y, error = switch_to_next_line(y, error)
+          end
         end
       end
     end
-
-    def pixels
-      from, to = sufficient.map { |point| point_based_on_steep(*point.sufficient) }.sort
-      bresenham_generation(from, to, 0, from.y)
-    end
   end
 
-  class Rectangle < GeometryFigure
+  class Rectangle < Figure
     attr_reader :top_left, :top_right, :bottom_left, :bottom_right, :left, :right
 
     def initialize(first_point, second_point)
       @left, @right = [first_point, second_point].sort
-      @top_left, @bottom_left, @top_right, @bottom_right = *[first_point, second_point,
-                      Point.new(first_point.x, second_point.y),
-                      Point.new(second_point.x, first_point.y)].sort
+      @top_left, @bottom_left, @top_right, @bottom_right = [
+        first_point, second_point,
+        Point.new(first_point.x, second_point.y),
+        Point.new(second_point.x, first_point.y)].sort
     end
 
-    def sufficient
+    def identify_by
       [top_left, bottom_left, bottom_right, top_right]
     end
 
+    def generate_lines_of_rectangle
+      [
+        Line.new(top_left, bottom_left),
+        Line.new(bottom_left, bottom_right),
+        Line.new(bottom_right, top_right),
+        Line.new(top_right, top_left),
+      ]
+    end
+
     def pixels
-      (sufficient << top_left).each_cons(2).each_with_object([]) do |points, gen_pixels|
-        gen_pixels.concat Line.new(*points).pixels
-      end
+      generate_lines_of_rectangle.map { |line| line.pixels }.flatten
     end
   end
 
   module Renderers
-    module Ascii
-      RENDER_TABLE = { 0 => '-', 1 => '@', :start => "",
-        :end => "", :line_separator => "\n" }
+    class Base
+      attr_reader :canvas
+
+      def initialize(canvas)
+        @canvas = canvas
+      end
+
+      def render
+        raise NotImplementedError
+      end
     end
 
-    module Html
-      RENDER_TABLE = { 0 => '<i></i>', 1 => '<b></b>',
-        :start => <<START_HTML, :end => <<END_HTML, :line_separator => "<br>" }
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Rendered Canvas</title>
-  <style type="text/css">
-    .canvas {
-      font-size: 1px;
-      line-height: 1px;
-    }
-    .canvas * {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 5px;
-    }
-    .canvas i {
-      background-color: #eee;
-    }
-    .canvas b {
-      background-color: #333;
-    }
-  </style>
-</head>
-<body>
-  <div class="canvas">
-START_HTML
-  </div>
-</body>
-</html>
-END_HTML
+    class Ascii < Base
+      def render
+        pixels = 0.upto(canvas.height.pred).map do |y|
+          0.upto(canvas.width.pred).map { |x| pixel_at(x, y) }
+        end
+
+        join_lines pixels.map { |line| line.join('') }
+      end
+
+      private
+
+      def pixel_at(x, y)
+        canvas.pixel_at?(x, y) ? full_pixel : blank_pixel
+      end
+
+      def full_pixel
+        '@'
+      end
+
+      def blank_pixel
+        '-'
+      end
+
+      def join_lines(lines)
+        lines.join("\n")
+      end
+    end
+
+    class Html < Ascii
+      TEMPLATE = '<!DOCTYPE html>
+        <html>
+        <head>
+          <title>Rendered Canvas</title>
+          <style type="text/css">
+            .canvas {
+              font-size: 1px;
+              line-height: 1px;
+            }
+            .canvas * {
+              display: inline-block;
+              width: 10px;
+              height: 10px;
+              border-radius: 5px;
+            }
+            .canvas i {
+              background-color: #eee;
+            }
+            .canvas b {
+              background-color: #333;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="canvas">
+            %s
+          </div>
+        </body>
+        </html>
+      '.freeze
+
+      def render
+        TEMPLATE % super
+      end
+
+      private
+
+      def full_pixel
+        '<b></b>'
+      end
+
+      def blank_pixel
+        '<i></i>'
+      end
+
+      def join_lines(lines)
+        lines.join('<br>')
+      end
     end
   end
 end
